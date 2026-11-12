@@ -1,0 +1,7 @@
+{
+	"version": "0.0.2",
+	"done": [
+		"step:0:Install sound2score/packages/player in its mirror",
+		"step:1:Build sound2score/packages/player packages in its mirror"
+	]
+}
