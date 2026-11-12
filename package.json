@@ -1,0 +1,45 @@
+{
+	"name": "@sound2score/player",
+	"version": "0.0.1",
+	"description": "Embed sound2score scores on your site and control playback from your page.",
+	"license": "MIT",
+	"type": "module",
+	"homepage": "https://sound2score.com",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/sound2score/player.git"
+	},
+	"keywords": [
+		"sound2score",
+		"sheet music",
+		"embed",
+		"iframe",
+		"player"
+	],
+	"exports": {
+		".": "./index.ts"
+	},
+	"files": [
+		"skills/**"
+	],
+	"dependencies": {
+		"core": "workspace:*"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.7",
+		"@types/bun": "catalog:",
+		"typescript": "^7.0.2",
+		"happy-dom": "^20.14.5"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"workspaces": {
+		"packages": [
+			"packages/core"
+		],
+		"catalog": {
+			"@types/bun": "^1.4"
+		}
+	}
+}
