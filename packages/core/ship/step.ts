@@ -1,53 +1,60 @@
-import type { Duration } from "core/time";
-import type { Stage } from "./artifact/artifact";
-import type { Cut } from "./cut";
+import { Duration } from "core/time";
+import type { Ctx } from "./ctx";
 
-/** Where a caller-defined step runs. Preflight steps precede the release prompt. */
-export type StepStage = "preflight" | Stage;
+/** How long a step may run before it fails, unless it declares its own. */
+export const DEFAULT_STEP_TIMEOUT = Duration.mins(60);
 
-/** What a running step tells whoever is watching the release. */
-export interface StepReport {
-	/** A package went to a registry that holds it until somebody approves it. */
-	staged(info: {
-		package: string;
-		version: string;
-		stageId: string;
-		url: string;
-	}): Promise<void>;
+/** One thing a ship does, run as its own short process. */
+export type Step = {
+	/** Unique within its target's plan. */
+	readonly id: string;
+	/** The line the review screen shows. */
+	readonly does: string;
+	/** Steps of the same target that must finish first. */
+	readonly dependencies?: readonly string[];
+	/** Whether this already happened, so a resumed ship can skip it. */
+	done?(ctx: Ctx): Promise<boolean>;
+	/**
+	 * How long `run` may take before the step fails, naming it, so a ship
+	 * stops and can be retried instead of waiting forever: an hour by default.
+	 * Raise it for a step that genuinely takes longer.
+	 */
+	timeout?: Duration;
+	/** Does it. */
+	run(ctx: Ctx): Promise<unknown>;
+};
+
+/** Declares a step. It only returns the step: nothing runs. */
+export function step(spec: Step): Step {
+	if (!spec.id.trim()) {
+		throw new Error("A step needs an id");
+	}
+	if (!spec.does.trim()) {
+		throw new Error(`The step "${spec.id}" needs a does line`);
+	}
+	const limit = spec.timeout ?? DEFAULT_STEP_TIMEOUT;
+	const run = (ctx: Ctx) =>
+		withTimeout(spec.run(ctx), limit, `The step "${spec.id}" timed out`);
+	return Object.freeze({
+		...spec,
+		run,
+		...(spec.dependencies && {
+			dependencies: Object.freeze([...spec.dependencies]),
+		}),
+	});
 }
 
-/** What one poll of a step's check found, for a check with more to say than pass or fail. */
-export interface CheckReport {
-	readonly passed: boolean;
-	/** What the step is still waiting on, in a word, such as `pending` or `held`. */
-	readonly status?: string;
-	/** Where a person can look into what it waits on. */
-	readonly url?: string;
-}
-
-/**
- * One named unit of release work. A deadline tells callers when to consider the
- * step hung; it never cancels the work. A check, when present, retries, backing
- * off, until it confirms that the work really landed; `waited` is how long it
- * has waited so far.
- */
-export interface Step {
-	readonly name: string;
-	readonly deadline: Duration;
-	readonly stage?: StepStage;
-	run(cut: Cut, report?: StepReport): Promise<void>;
-	/**
-	 * What the step does in a dry run in place of `run`, with no check after
-	 * it: say what it would send, or send it somewhere local instead. A step
-	 * without one runs as usual when it only works on this machine (preflight,
-	 * stamp and build), and is skipped from the publish stage on, so a dry run
-	 * never sends anything out.
-	 */
-	dryRun?(cut: Cut): Promise<void>;
-	check?(cut: Cut, waited: Duration): Promise<boolean | CheckReport>;
-	/**
-	 * How often to check, steadily, in place of the backoff, for a check
-	 * whose answer comes soon and is worth hearing as it comes.
-	 */
-	readonly checkEvery?: Duration;
+/** `work`, or a rejection once `limit` passes, whichever comes first. */
+export function withTimeout<T>(
+	work: Promise<T>,
+	limit: Duration,
+	what: string,
+): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		const timer = setTimeout(
+			() => reject(new Error(`${what} after ${Math.round(limit.ms / 1000)}s`)),
+			limit.ms,
+		);
+		work.then(resolve, reject).finally(() => clearTimeout(timer));
+	});
 }

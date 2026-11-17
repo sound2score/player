@@ -1,6 +1,6 @@
 {
 	"name": "@sound2score/player",
-	"version": "0.0.3",
+	"version": "0.0.4",
 	"description": "Embed sound2score scores on your site and control playback from your page.",
 	"license": "MIT",
 	"type": "module",
@@ -39,7 +39,9 @@
 			"packages/core"
 		],
 		"catalog": {
-			"@types/bun": "^1.4"
+			"@standard-schema/spec": "^1.1.0",
+			"@types/bun": "^1.4",
+			"zod": "^4.4.3"
 		}
 	}
 }

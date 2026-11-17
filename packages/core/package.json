@@ -1,15 +1,27 @@
 {
 	"name": "core",
-	"version": "0.0.3",
 	"private": true,
+	"description": "The parts of an app that get written again every time, behind interfaces a test can replace, with React and AWS CDK bindings on their own subpaths",
 	"type": "module",
 	"exports": {
 		"./assert": "./assert/index.ts",
+		"./cmd": "./cmd/index.ts",
 		"./disposable": "./disposable/index.ts",
 		"./events": "./events/index.ts",
 		"./log": "./log/index.ts",
 		"./ship": "./ship/index.ts",
 		"./system": "./system/index.ts",
-		"./time": "./time/index.ts"
-	}
+		"./system/testing": "./system/testing.ts",
+		"./time": "./time/index.ts",
+		"./time/testing": "./time/testing.ts"
+	},
+	"dependencies": {
+		"@standard-schema/spec": "catalog:"
+	},
+	"peerDependencies": {},
+	"peerDependenciesMeta": {},
+	"devDependencies": {
+		"zod": "catalog:"
+	},
+	"version": "0.0.4"
 }
