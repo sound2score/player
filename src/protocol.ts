@@ -7,6 +7,18 @@ import type { BarRange } from "./embed-options";
  */
 export const PROTOCOL_VERSION = 1;
 
+/**
+ * The oldest protocol version the embed still answers. A page speaking an
+ * older version receives an `unavailable` event with reason `"upgrade"`.
+ */
+export const MIN_PROTOCOL_VERSION = 1;
+
+/**
+ * The oldest `@sound2score/player` package version that speaks at least
+ * `MIN_PROTOCOL_VERSION`.
+ */
+export const MIN_PLAYER_VERSION = "0.0.3";
+
 /** Marks a message as an embed's, among everything else a page posts. */
 export const PROTOCOL_TAG = "sound2score-player";
 
@@ -39,12 +51,16 @@ export type UnavailableReason =
 	/** The owner has reached their spending limit until `resetsAt`. */
 	| "capped"
 	/** Too many new viewers came from one network, until `resetsAt`. */
-	| "busy";
+	| "busy"
+	/** This copy of `@sound2score/player` and the embed speak incompatible protocol versions. */
+	| "upgrade";
 
 export type Unavailable = Readonly<{
 	reason: UnavailableReason;
 	/** When it can play again, in milliseconds since the epoch, or null. */
 	resetsAt: number | null;
+	/** The `@sound2score/player` version to install when `reason` is `"upgrade"`. */
+	upgradeTo?: string;
 }>;
 
 /** What your page asks the embed to do. */

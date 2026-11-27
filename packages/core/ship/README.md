@@ -71,12 +71,19 @@ view(mdom, { bump: "minor" });
 
 A target may also declare `unshipped(ctx)`, returning how many commits are
 not yet shipped; `commitsSince(ctx, { tag, paths })` counts those since a git
-tag, and `commitsSince(ctx, { version: "<package.json>", paths })` since the
-last commit that changed that file's `version`, for a package released
-through a public mirror, which leaves no tag here. `ship plan` does not run it, so a plan prints at once; `ship unshipped`
+tag, `commitsSince(ctx, { release: "<package>", paths })` since the newest
+`<package>@<version>` tag `npm.release` leaves on the mono commit it built
+from, and `commitsSince(ctx, { version: "<package.json>", paths })` since the
+last commit that changed that file's `version`, which `npm.release` no longer
+bumps here. `ship plan` does not run it, so a plan prints at once; `ship unshipped`
 counts every target at once and prints `{ "<name>": <count> }`, leaving out a
 target that declares nothing, and one whose count throws (the error goes to
 stderr).
+
+A target may declare `current(ctx)`, returning the version it is at now;
+`npm.current("<package>")` answers with npm's latest. `ship current` prints
+`{ "<name>": "<version>" }` for every target that declares one, leaving out
+the rest and any that throw (the error goes to stderr).
 
 ## Serving a target
 
@@ -95,14 +102,17 @@ await serve(mdom, argv); // or serve([staging, prod], argv)
 ```sh
 bin/mdom ship plan --bump minor      # the plan as JSON, as view() returns it
 bin/mdom ship unshipped             # { "@stringsync/mdom": 3 }
+bin/mdom ship current              # { "@stringsync/mdom": "1.2.0" }
+bin/mdom ship versions             # { "prod": [{ "version": "1.2.0", "note": "staging now" }] }
 bin/mdom ship done publish           # true or false
 bin/mdom ship run publish            # runs one step, writing JSON lines
 bin/mdom ship --bump minor           # shows the plan, asks, ships it all here
 ```
 
-Every request takes `--target <name>`, and all but `unshipped` take
+Every request takes `--target <name>`, and all but `unshipped`, `current` and `versions` take
 `--version` or `--bump`, and `--upstream <name>=<version>`, once for each target it depends
-on. With several targets,
+on. A target declaring `version: { follows: "<dep>" }` can run `done`, `run`, or a terminal
+ship with `--upstream <dep>=<version>` in place of `--version` or `--bump`. With several targets,
 `plan` with no `--target` prints an array of plans, and the rest need one.
 `plan` shows an upstream it was not given as "the version <name> releases";
 the others refuse to plan without it.
@@ -208,12 +218,18 @@ export const staging = target({
   session has lapsed, so the link and code reach the user as a prompt. A
   deploy with no `profile` takes the environment's credentials and has no
   sign-in.
-- **diff** shows what the deploy changes, and asks the user to confirm one
-  that adds IAM or security group rules or replaces a resource; a No fails
-  the step.
-- **deploy** is skipped when `cdk diff` finds the stack already matches this
-  checkout, so a resumed ship deploys nothing twice.
-- **verify** fails unless the deployed stack matches this checkout.
+- **diff** prepares the deploy's one CloudFormation change set, named
+  `core-ship` (`cdk deploy --method=prepare-change-set`, the only synth of
+  the deploy), reads it with `describe-change-set`, and asks the user to
+  confirm a change that adds or changes an IAM resource, a resource policy,
+  a security group or a Lambda permission, or replaces a resource; a No
+  fails the step.
+- **deploy** executes that change set (`execute-change-set`) and waits for
+  the stack to take it up and settle. A change set gone, failed or spent is
+  prepared again, asking its risks again. The step is skipped when the change
+  set already ran, or had nothing to change, and the stack settled, so a
+  resumed ship deploys nothing twice.
+- **verify** fails unless the stack settled after its deploy.
 
 A failed deploy follows what it left the stack in to the end, showing each
 poll on the step's line, and fails saying which it was: rolled back
@@ -227,21 +243,24 @@ and the deploy, before anything else, ask whether to continue its rollback
 a rollback that fails again, fails the step, and a stuck resource is fixed by
 hand before the step is retried. The deploy step's timeout is 150 minutes, room for a
 deploy and the rollback it waits out. A stack is found by its
-CloudFormation name, `name` with each `/` made `-` unless `stackName` says
-otherwise.
+CloudFormation name, which the deploy reads once from the app
+(`cdk list --long --json`, with the same `context`), so a stack inside a stage
+is found by its stage's `stageName` (`prod-App` for `Prod/App`); `stackName`
+overrides it.
 
 Optional `context`, `noRollback` and `cheapReplacement` serve a stack deployed
 in steps. `context: async (ctx) => ["--context", "digest=..."]` is read when
-the diff and the deploy run, so it can read live state, and reaches both.
-`noRollback: true` deploys with `--no-rollback`, keeping rollback on when
-every replaced resource's type is in `cheapReplacement` (default
-`AWS::ECS::TaskDefinition`); a cheap replacement asks no confirm, a costly
-one does. The diff also reads `cdk diff --security-only`, so the confirm for
-widened access stays the one place that asks.
+the stack's name is listed and its change set is prepared, so it can read
+live state.
+`noRollback: true` executes with `--disable-rollback`, keeping rollback on
+when the change replaces a resource, which CloudFormation requires (a stack
+an earlier deploy left paused is rolled back first). A replaced resource
+whose type is in `cheapReplacement` (default `AWS::ECS::TaskDefinition`)
+asks no confirm, a costly one does.
 
 ## Publishing to npm
 
-`npm.release({ package, bump, repository, test, keep, pins, fold, scope, prepare, check, mirrorTest, dependencies })` publishes a
+`npm.release({ package, bump | version, repository, test, keep, omit, pins, fold, scope, prepare, check, mirrorTest, dependencies })` publishes a
 package of mono from its public mirror, through a GitHub workflow npm
 trusts:
 
@@ -262,9 +281,15 @@ export const mdom = target({
 ```
 
 - **test** runs `test` from mono's root.
-- **version** takes npm's latest version raised by the bump, or the
-  package's own the first time, and keeps it beside the mirror's checkout
-  (in mono's git folder, under `ship/npm/`), so a resumed release keeps it.
+- **version** takes npm's latest version raised by `bump` (or the package's own
+  the first time), or uses an explicit `version` when passed in place of `bump`
+  (for example from a followed upstream via `version: { follows: "<dep>" }`).
+  An explicit `version` must be a clean semver string (no `v` prefix,
+  whitespace, build metadata, or unresolved upstream placeholder) and must not
+  already be published on npm unless resuming that same release's cached state.
+  The chosen version is kept beside the mirror's checkout (under
+  `~/.cache/core-ship/npm/`, respecting `XDG_CACHE_HOME`), so OS temp cleanup
+  never reaps either and a resumed release keeps it.
 - **workflow** commits `.github/workflows/publish.yml` to the mirror when
   it differs: the job checks out the release commit, installs, builds the
   package and runs `npm publish` on the build.
@@ -274,11 +299,13 @@ export const mdom = target({
   `workspace:` dependency on a package outside the mirror takes the version
   npm has, so ship that one first. The project's `mirror/` folder, when it
   has one, is laid over the mirror's root and not copied itself, for files
-  only the mirror has (its guide, Dockerfile, workflows); `keep: ["skills/x/**"]`
-  carries paths the mirror would leave out. `scope: "package"` mirrors the published package's
+  only the mirror has (its guide, Dockerfile, workflows); `omit: ["packages/book/**"]`
+  leaves out tracked project paths, but never the `mirror/` overlay, and
+  `keep: ["skills/x/**"]` carries paths the mirror would leave out, winning
+  when `keep` and `omit` both match. `scope: "package"` mirrors the published package's
   folder alone, at the mirror's root (its own manifest the root's, with the
   `core` it reaches under `packages/core`), for a project that keeps the rest
-  private; `keep` globs and `mirror/` are then relative to that folder. `fold` names private packages of
+  private; `keep` and `omit` globs and `mirror/` are then relative to that folder. `fold` names private packages of
   other projects to carry in as well, as `fold: { "@mono/rec": { files:
   ["extension/**", "control/index.html"], entries: ["control/main.tsx"] } }`:
   each is copied to `packages/<folder>` in the mirror's workspace and bundled
@@ -309,7 +336,9 @@ export const mdom = target({
   `npm trust list` itself needs a one-time password) (it needs npm 11.15 or later and the account's second factor).
 - **publish** runs the workflow on the release commit and waits until npm
   has the version, failing when the run fails.
-- **tag** creates the GitHub release, tagging `v<version>` with its notes.
+- **tag** creates the GitHub release, tagging `v<version>` with its notes,
+  and tags mono's commit the mirror was written from `<package>@<version>`,
+  pushed to origin, so `commitsSince`'s `release` marker counts from it.
 
 The login, first-publish and trust steps run npm under a pseudo-terminal
 (`script`), since npm starts its web sign-in and one-time-password flow only
@@ -376,3 +405,18 @@ owns those operations and idempotency checks. Only successful verification
 should call `ctx.released(version)`, including verification in `done` when
 resuming an already successful deployment. No release is reported automatically.
 Ships UI support and adoption by individual deployments are separate changes.
+
+### Following an upstream, and the versions a target may ship
+
+A deployment promoted from an earlier stage names that stage with
+`version: { follows: "staging" }`, which must be one of its `dependencies`.
+Shipped together with no version picked, it takes the version the stage
+releases in this ship, read from `upstream` as any dependent does; `view`
+reports `follows`, so a review screen can offer "Follow staging". It can
+still ship alone with an explicit `--version`.
+
+`versions(ctx)` lists the versions a target may ship, newest first, each with
+an optional short `note` (`"staging now"`, a date). `ship versions` prints
+them, keyed by target name, for a version picker in place of a free-text
+field. Like `current`, it is a lookup the Ships page runs apart from the
+plan; the target's own steps still refuse a version it cannot ship.

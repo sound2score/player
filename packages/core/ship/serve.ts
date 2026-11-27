@@ -3,6 +3,7 @@ import { cli, type Deps } from "core/cmd";
 import { NodePs } from "core/system";
 import { z } from "zod";
 import type { Quiet } from "./answering-sh";
+import type { Ctx } from "./ctx";
 import { type RunLine, StepCtxs, type Terminal } from "./process-ctx";
 import { type AnswerInput, noPrompts, PromptChannel } from "./prompts";
 import { StdTerminal } from "./std-terminal";
@@ -42,6 +43,10 @@ const bump = z.enum(["patch", "minor", "major"]).optional();
  *   command serves several targets and `--target` names none.
  * - `unshipped` prints each target's unshipped commit count as JSON, an
  *   object keyed by target name, leaving out targets that cannot tell.
+ * - `current` prints each target's current version as JSON, an object keyed
+ *   by target name, leaving out targets that cannot tell.
+ * - `versions` prints the versions each target may ship, newest first, as
+ *   JSON keyed by target name, leaving out targets that cannot tell.
  * - `done <step>` prints `true` or `false`: whether the step already happened.
  * - `run <step>` runs one step, writing JSON lines as it goes, and on failure
  *   an error line last and exit 1.
@@ -93,41 +98,71 @@ export async function serve(
 			log.info(JSON.stringify(out));
 		});
 
-	ship
-		.command("unshipped")
-		.description("print each target's unshipped commit count as JSON")
-		.option("target", z.string().optional())
-		.action(async (opts, { log }) => {
-			const ctx = ctxs.stream(
-				{ send: (line) => log.error(JSON.stringify(line)) },
-				noPrompts,
-			);
-			const chosen = opts.target ? [pick(list, opts.target)] : list;
-			const counts = await Promise.all(
-				chosen.map(async (each): Promise<[string, number] | undefined> => {
-					if (!each.unshipped) {
-						return undefined;
-					}
-					try {
-						return [each.name, await each.unshipped(ctx)];
-					} catch (error) {
-						log.error(
-							JSON.stringify({
-								type: "error",
-								target: each.name,
-								message: error instanceof Error ? error.message : String(error),
-							}),
-						);
-						return undefined;
-					}
-				}),
-			);
-			log.info(
-				JSON.stringify(
-					Object.fromEntries(counts.filter((each) => each !== undefined)),
-				),
-			);
-		});
+	/**
+	 * A command that prints what `read` gives for each chosen target as JSON,
+	 * keyed by target name, leaving out targets it gives nothing for and
+	 * reporting one that throws on stderr.
+	 */
+	const perTarget = <T>(
+		command: string,
+		description: string,
+		read: (
+			target: Target,
+		) => ((ctx: Pick<Ctx, "sh">) => Promise<T>) | undefined,
+	) =>
+		ship
+			.command(command)
+			.description(description)
+			.option("target", z.string().optional())
+			.action(async (opts, { log }) => {
+				const ctx = ctxs.stream(
+					{ send: (line) => log.error(JSON.stringify(line)) },
+					noPrompts,
+				);
+				const chosen = opts.target ? [pick(list, opts.target)] : list;
+				const found = await Promise.all(
+					chosen.map(async (each): Promise<[string, T] | undefined> => {
+						const reader = read(each);
+						if (!reader) {
+							return undefined;
+						}
+						try {
+							return [each.name, await reader(ctx)];
+						} catch (error) {
+							log.error(
+								JSON.stringify({
+									type: "error",
+									target: each.name,
+									message:
+										error instanceof Error ? error.message : String(error),
+								}),
+							);
+							return undefined;
+						}
+					}),
+				);
+				log.info(
+					JSON.stringify(
+						Object.fromEntries(found.filter((each) => each !== undefined)),
+					),
+				);
+			});
+
+	perTarget(
+		"unshipped",
+		"print each target's unshipped commit count as JSON",
+		(each) => each.unshipped,
+	);
+	perTarget(
+		"current",
+		"print each target's current version as JSON",
+		(each) => each.current,
+	);
+	perTarget(
+		"versions",
+		"print the versions each target may ship as JSON",
+		(each) => each.versions,
+	);
 
 	ship
 		.command("done")
@@ -222,12 +257,20 @@ function find(
 	opts: StepRequest & { lenient?: boolean | "planning" },
 ): Step {
 	const chosen = pick(list, opts.target);
+	const upstreams = readUpstream(opts.upstream);
+	const follows = chosen.version?.follows;
+	const hasFollowed = follows !== undefined && upstreams.has(follows);
 	if (
 		chosen.version &&
 		opts.version === undefined &&
-		!(opts.bump ?? chosen.bump)
+		!(opts.bump ?? chosen.bump) &&
+		!hasFollowed
 	) {
-		throw new Error(`The target "${chosen.name}" needs --version or --bump`);
+		throw new Error(
+			follows !== undefined
+				? `The target "${chosen.name}" needs --version, --bump, or --upstream ${follows}=<version>`
+				: `The target "${chosen.name}" needs --version or --bump`,
+		);
 	}
 	// A `done` or `run` request may come before any upstream has released (a
 	// step like `test` reads none), so it plans with a placeholder version, as
@@ -235,15 +278,16 @@ function find(
 	// With "planning" the placeholder is only for building the plan: a step
 	// that reads an upstream as it runs still refuses without the version.
 	let planning = true;
-	const strict = parseUpstream(opts.upstream);
+	const strict = upstreamLookup(upstreams);
+	const lenient = upstreamLookup(upstreams, (each) => ({
+		version: `the version ${each} releases`,
+	}));
 	const planned = steps(chosen, {
 		bump: opts.bump,
 		version: opts.version,
 		upstream: (name) =>
 			opts.lenient && (opts.lenient !== "planning" || planning)
-				? parseUpstream(opts.upstream, (each) => ({
-						version: `the version ${each} releases`,
-					}))(name)
+				? lenient(name)
 				: strict(name),
 	});
 	planning = false;
@@ -264,6 +308,10 @@ function parseUpstream(
 	values: readonly string[],
 	missing?: (name: string) => Upstream,
 ): (name: string) => Upstream {
+	return upstreamLookup(readUpstream(values), missing);
+}
+
+function readUpstream(values: readonly string[]): Map<string, string> {
 	const versions = new Map<string, string>();
 	for (const value of values) {
 		const at = value.indexOf("=");
@@ -272,6 +320,13 @@ function parseUpstream(
 		}
 		versions.set(value.slice(0, at), value.slice(at + 1));
 	}
+	return versions;
+}
+
+function upstreamLookup(
+	versions: ReadonlyMap<string, string>,
+	missing?: (name: string) => Upstream,
+): (name: string) => Upstream {
 	return (name) => {
 		const version = versions.get(name);
 		if (version !== undefined) {

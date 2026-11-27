@@ -1,7 +1,7 @@
 ---
 name: sound2score-player
 description: Embed sound2score sheet music on a website and control it from the page with @sound2score/player. Use when adding a sound2score score to a site, creating or attaching its embed, passing the viewer's user ID, playing, pausing, seeking, looping, changing speed, transposing or toggling the metronome from page code, or reacting to the embed's ready, change and unavailable events.
-version: 0.0.5
+version: 0.2.1
 ---
 
 # sound2score Player
@@ -110,12 +110,18 @@ function show(state: PlayerState): void {
 player.events.on("ready", show);
 // At most 4 times a second, whenever what the Player shows changed.
 player.events.on("change", show);
-player.events.on("unavailable", ({ reason, resetsAt }) => {
+player.events.on("unavailable", ({ reason, resetsAt, upgradeTo }) => {
 	// "not-found": no such score, or it can't be embedded.
 	// "site": this site isn't one the owner allows.
 	// "capped": the owner reached their spending limit until resetsAt.
 	// "busy": too many new viewers from one network, until resetsAt.
-	console.log(reason, resetsAt === null ? null : new Date(resetsAt));
+	// "upgrade": this package and the embed speak different protocol versions;
+	// upgradeTo names the @sound2score/player version to install when set.
+	console.log(
+		reason,
+		resetsAt === null ? null : new Date(resetsAt),
+		upgradeTo ?? null,
+	);
 });
 ```
 

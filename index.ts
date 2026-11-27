@@ -27,6 +27,7 @@ export { IframeEmbedFrame } from "./src/iframe-embed-frame";
 export {
 	type CreateOptions,
 	Player,
+	type PlayerConfig,
 	type PlayerEvents,
 	type PlayerOptions,
 } from "./src/player";
@@ -35,6 +36,8 @@ export {
 	type EmbedEvent,
 	type EmbedMessage,
 	type HostMessage,
+	MIN_PLAYER_VERSION,
+	MIN_PROTOCOL_VERSION,
 	type PlayerState,
 	PROTOCOL_TAG,
 	PROTOCOL_VERSION,

@@ -17,6 +17,7 @@ const REASONS: readonly UnavailableReason[] = [
 	"site",
 	"capped",
 	"busy",
+	"upgrade",
 ];
 
 /**
@@ -156,7 +157,13 @@ export class EmbedMessageReader {
 		if (!reason || (fields?.resetsAt !== null && resetsAt === null)) {
 			return null;
 		}
-		return { reason, resetsAt };
+		if (fields?.upgradeTo === undefined) {
+			return { reason, resetsAt };
+		}
+		if (typeof fields.upgradeTo !== "string" || fields.upgradeTo.length === 0) {
+			return null;
+		}
+		return { reason, resetsAt, upgradeTo: fields.upgradeTo };
 	}
 
 	private bars(value: unknown): BarRange | null {

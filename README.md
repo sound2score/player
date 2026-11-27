@@ -72,10 +72,13 @@ work even when the embed's options hide that control.
 
 - `ready(state)`: the score loaded and takes commands.
 - `change(state)`: what the Player shows changed, at most 4 times a second.
-- `unavailable({ reason, resetsAt })`: the embed can't play. `reason` is
-  `not-found`, `site` (your site isn't allowed), `capped` (the owner's
-  spending limit, until `resetsAt`) or `busy` (too many new viewers from one
-  network, until `resetsAt`).
+- `unavailable({ reason, resetsAt, upgradeTo })`: the embed can't play.
+  `reason` is `not-found`, `site` (your site isn't allowed), `capped` (the
+  owner's spending limit, until `resetsAt`), `busy` (too many new viewers
+  from one network, until `resetsAt`) or `upgrade` (this copy of
+  `@sound2score/player` and the embed speak incompatible protocol versions;
+  when `upgradeTo` is set, install `@sound2score/player@<upgradeTo>` or
+  later).
 
 ## Students
 

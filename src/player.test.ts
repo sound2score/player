@@ -106,6 +106,102 @@ describe("Player", () => {
 		]);
 	});
 
+	it("reports an upgrade refusal from the embed and logs the target version", () => {
+		const guardedFrame = new FakeEmbedFrame();
+		const errors: string[] = [];
+		const guarded = new Player(guardedFrame, {
+			onError: (message) => errors.push(message),
+		});
+		const reasons: Array<{ reason: string; upgradeTo?: string }> = [];
+		guarded.events.on("unavailable", (unavailable) =>
+			reasons.push({
+				reason: unavailable.reason,
+				upgradeTo: unavailable.upgradeTo,
+			}),
+		);
+		guarded.play();
+
+		guardedFrame.receive({
+			tag: PROTOCOL_TAG,
+			version: 2,
+			event: {
+				kind: "unavailable",
+				unavailable: { reason: "upgrade", resetsAt: null, upgradeTo: "2.0.0" },
+			},
+		});
+
+		expect(reasons).toEqual([{ reason: "upgrade", upgradeTo: "2.0.0" }]);
+		expect(guarded.isReady()).toBe(false);
+		expect(guarded.getUnavailable()).toEqual({
+			reason: "upgrade",
+			resetsAt: null,
+			upgradeTo: "2.0.0",
+		});
+		expect(errors).toHaveLength(1);
+		expect(errors[0]).toContain("@sound2score/player@2.0.0");
+		guarded.dispose();
+	});
+
+	it("logs a latest upgrade hint when the embed omits upgradeTo", () => {
+		const guardedFrame = new FakeEmbedFrame();
+		const errors: string[] = [];
+		const guarded = new Player(guardedFrame, {
+			onError: (message) => errors.push(message),
+		});
+
+		guardedFrame.receive({
+			tag: PROTOCOL_TAG,
+			version: 2,
+			event: {
+				kind: "unavailable",
+				unavailable: { reason: "upgrade", resetsAt: null },
+			},
+		});
+
+		expect(errors).toHaveLength(1);
+		expect(errors[0]).toContain("@sound2score/player@latest");
+		guarded.dispose();
+	});
+
+	it("refuses with upgrade when the embed speaks an older protocol version", () => {
+		const newerFrame = new FakeEmbedFrame();
+		const errors: string[] = [];
+		const newer = new Player(newerFrame, {
+			protocolVersion: 2,
+			onError: (message) => errors.push(message),
+		});
+		const events: string[] = [];
+		newer.events.on("ready", () => events.push("ready"));
+		newer.events.on("change", () => events.push("change"));
+		newer.events.on("unavailable", ({ reason }) =>
+			events.push(`unavailable:${reason}`),
+		);
+		newer.play();
+
+		newerFrame.receive({
+			tag: PROTOCOL_TAG,
+			version: 1,
+			event: { kind: "ready", state: STATE },
+		});
+		newerFrame.receive({
+			tag: PROTOCOL_TAG,
+			version: 1,
+			event: { kind: "change", state: { ...STATE, bar: 2 } },
+		});
+
+		expect(newer.isReady()).toBe(false);
+		expect(newer.getUnavailable()).toEqual({
+			reason: "upgrade",
+			resetsAt: null,
+		});
+		expect(events).toEqual(["unavailable:upgrade"]);
+		expect(kinds(newerFrame)).toEqual(["hello"]);
+		expect(errors).toHaveLength(1);
+		expect(errors[0]).toContain("protocol version 1");
+		expect(errors[0]).toContain("protocol version 2");
+		newer.dispose();
+	});
+
 	it("lets go of the embed when disposed", () => {
 		player.dispose();
 

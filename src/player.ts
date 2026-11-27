@@ -57,6 +57,12 @@ export type CreateOptions = Readonly<{
 	origin?: string;
 }>;
 
+/** Optional runtime settings for a Player instance. */
+export type PlayerConfig = Readonly<{
+	protocolVersion?: number;
+	onError?: (message: string) => void;
+}>;
+
 const DEFAULT_ORIGIN = "https://sound2score.com";
 
 /**
@@ -69,9 +75,12 @@ const DEFAULT_ORIGIN = "https://sound2score.com";
 export class Player implements Eventful<PlayerEvents>, Resource {
 	private readonly dispatcher = new Dispatcher<PlayerEvents>();
 	private readonly disposer = new Disposer();
+	private readonly protocolVersion: number;
+	private readonly onError: (message: string) => void;
 	private state: PlayerState | null = null;
 	private ready = false;
 	private unavailable: Unavailable | null = null;
+	private upgradeLogged = false;
 	private waiting: Command[] = [];
 
 	/** Adds an embed of a score to `container`, filling its width. */
@@ -119,7 +128,12 @@ export class Player implements Eventful<PlayerEvents>, Resource {
 		};
 	}
 
-	constructor(private readonly frame: EmbedFrame) {
+	constructor(
+		private readonly frame: EmbedFrame,
+		config?: PlayerConfig,
+	) {
+		this.protocolVersion = config?.protocolVersion ?? PROTOCOL_VERSION;
+		this.onError = config?.onError ?? ((message) => console.error(message));
 		this.disposer.use(this.dispatcher);
 		this.disposer.use(frame);
 		this.disposer.defer(
@@ -204,10 +218,36 @@ export class Player implements Eventful<PlayerEvents>, Resource {
 	}
 
 	private send(command: Command): void {
-		this.frame.post({ tag: PROTOCOL_TAG, version: PROTOCOL_VERSION, command });
+		this.frame.post({
+			tag: PROTOCOL_TAG,
+			version: this.protocolVersion,
+			command,
+		});
 	}
 
-	private receive({ event }: EmbedMessage): void {
+	private receive({ version, event }: EmbedMessage): void {
+		if (
+			event.kind === "unavailable" &&
+			event.unavailable.reason === "upgrade"
+		) {
+			this.rejectUpgrade(
+				event.unavailable,
+				event.unavailable.upgradeTo
+					? `@sound2score/player: This version is no longer supported by the embed. Upgrade to @sound2score/player@${event.unavailable.upgradeTo} or later (npm install @sound2score/player@${event.unavailable.upgradeTo}).`
+					: "@sound2score/player: This version is no longer supported by the embed. Upgrade to the latest @sound2score/player (npm install @sound2score/player@latest).",
+			);
+			return;
+		}
+		if (version < this.protocolVersion) {
+			if (this.unavailable?.reason === "upgrade") {
+				return;
+			}
+			this.rejectUpgrade(
+				{ reason: "upgrade", resetsAt: null },
+				`@sound2score/player: The embed speaks protocol version ${version}, which is older than this package's protocol version ${this.protocolVersion}. Wait for the embed to update or install a matching version of @sound2score/player.`,
+			);
+			return;
+		}
 		switch (event.kind) {
 			case "ready": {
 				this.state = event.state;
@@ -237,10 +277,22 @@ export class Player implements Eventful<PlayerEvents>, Resource {
 		}
 	}
 
+	private rejectUpgrade(unavailable: Unavailable, message: string): void {
+		this.ready = false;
+		this.waiting = [];
+		this.unavailable = unavailable;
+		if (!this.upgradeLogged) {
+			this.upgradeLogged = true;
+			this.onError(message);
+		}
+		this.dispatcher.dispatch("unavailable", unavailable);
+	}
+
 	/** A page loading again starts over, so the Player asks again whether it is ready. */
 	private loaded(): void {
 		this.ready = false;
 		this.unavailable = null;
+		this.upgradeLogged = false;
 		this.send({ kind: "hello" });
 	}
 }

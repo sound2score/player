@@ -107,6 +107,51 @@ describe("EmbedMessageReader", () => {
 		expect(reader.embed(message)).toEqual(message);
 	});
 
+	it("reads an upgrade refusal with and without upgradeTo", () => {
+		const withTarget: EmbedMessage = {
+			tag: PROTOCOL_TAG,
+			version: 2,
+			event: {
+				kind: "unavailable",
+				unavailable: { reason: "upgrade", resetsAt: null, upgradeTo: "1.2.0" },
+			},
+		};
+		const withoutTarget: EmbedMessage = {
+			tag: PROTOCOL_TAG,
+			version: 2,
+			event: {
+				kind: "unavailable",
+				unavailable: { reason: "upgrade", resetsAt: null },
+			},
+		};
+
+		expect(reader.embed(withTarget)).toEqual(withTarget);
+		expect(reader.embed(withoutTarget)).toEqual(withoutTarget);
+	});
+
+	it("drops an upgrade refusal with a malformed upgradeTo", () => {
+		expect(
+			reader.embed({
+				tag: PROTOCOL_TAG,
+				version: 2,
+				event: {
+					kind: "unavailable",
+					unavailable: { reason: "upgrade", resetsAt: null, upgradeTo: "" },
+				},
+			}),
+		).toBeNull();
+		expect(
+			reader.embed({
+				tag: PROTOCOL_TAG,
+				version: 2,
+				event: {
+					kind: "unavailable",
+					unavailable: { reason: "upgrade", resetsAt: null, upgradeTo: 42 },
+				},
+			}),
+		).toBeNull();
+	});
+
 	it("drops a reason it doesn't know", () => {
 		expect(
 			reader.embed({
