@@ -1,7 +1,7 @@
 ---
 name: sound2score-player
 description: Embed sound2score sheet music on a website and control it from the page with @sound2score/player. Use when adding a sound2score score to a site, creating or attaching its embed, passing the viewer's user ID, playing, pausing, seeking, looping, changing speed, transposing or toggling the metronome from page code, or reacting to the embed's ready, change and unavailable events.
-version: 0.2.1
+version: 0.2.2
 ---
 
 # sound2score Player
